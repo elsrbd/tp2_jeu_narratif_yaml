@@ -1,0 +1,79 @@
+start_scene: entrance
+initial_hp: 10
+
+scenes:
+  - id: entrance
+    title: Porte Principale
+    text: La pluie frappe les vitres. Devant vous, le complexe est ouvert.
+    choices:
+      - label: Entrer dans le hall
+        next: hall
+      - label: Renoncer et partir dans la rue
+        next: street
+
+  - id: hall
+    title: Hall Central
+    text: Un ecran clignote. Trois couloirs sont accessibles.
+    choices:
+      - label: Fouiller le local de stockage
+        next: storage
+      - label: Monter au laboratoire
+        next: laboratory
+      - label: Forcer l'acces au toit
+        next: roof
+        required_item: badge
+
+  - id: storage
+    title: Stockage
+    text: Des caisses renversees. Une lampe encore fonctionnelle est au sol.
+    found_item: lampe
+    choices:
+      - label: Retourner au hall
+        next: hall
+      - label: Descendre vers la salle du generateur
+        next: generator
+
+  - id: generator
+    title: Generateur
+    text: L'air est toxique. Vous perdez du temps et de l'energie.
+    hp_delta: -2
+    choices:
+      - label: Relancer le courant et acceder a la securite
+        next: security
+      - label: Remonter vers le stockage
+        next: storage
+
+  - id: security
+    title: Poste de Securite
+    text: Un badge d'acces pend sur un panneau de controle.
+    found_item: badge
+    choices:
+      - label: Retourner dans le hall
+        next: hall
+      - label: Visiter le laboratoire
+        next: laboratory
+
+  - id: laboratory
+    title: Laboratoire
+    text: Des reactifs instables chauffent encore dans une hotte fissuree.
+    choices:
+      - label: Declencher l'experience instable
+        next: collapse
+      - label: Revenir au hall
+        next: hall
+
+  - id: roof
+    title: Toit
+    text: Vous activez la balise de secours. Un drone vous repere.
+    ending: victory
+
+  - id: street
+    title: Rue
+    text: Vous fuyez dans la nuit. Vous etes sauf, mais sans reponse.
+    ending: escape
+
+  - id: collapse
+    title: Effondrement
+    text: Une onde de choc traverse le batiment. Le plafond s'effondre.
+    hp_delta: -12
+    ending: defeat
