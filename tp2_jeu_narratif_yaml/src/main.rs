@@ -1,200 +1,13 @@
-use serde::{Serialize, Deserialize};
-use std::{collections::HashMap, thread::current};
+mod errors;
+mod models;
+mod commands;
+
+use crate::models::{Scenario, GameState, validate_scenario};
+use crate::errors::GameError;
+use crate::commands::{CommandOutcome, parse_command, GameCommand, LookCommand, ChooseCommand, InventoryCommand, StatusCommand, QuitCommand};
+
 use std::io::{self, Write}; 
-use std::collections::HashSet;
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Scenario {
-    pub start_scene: String,
-    pub initial_hp: i32,
-    pub scenes: Vec<Scene>,
-}
-
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Scene {
-    pub id: String,
-    pub title: String,
-    pub text: String,
-    pub choices: Option<Vec<Choices>>,
-    pub found_item : Option<String>,
-    pub ending: Option<String>,
-    pub hp_delta: Option<i8>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Choices {
-    pub label: String,
-    pub next: String,
-    pub required_item: Option<String>
-}
-
-pub struct GameState {
-    pub current_scene_id: String,
-    pub inventory: Vec<String>,
-    pub hp: i32,
-    pub is_running: bool,
-}
-
-#[derive(Debug)]
-pub enum GameError {
-    InvalidChoice,
-    MissingItem(String),
-    SceneNotFound(String),
-}
-
-
-pub fn validate_scenario(scenario: &Scenario) -> Result<(), String> {
-    let mut scene_ids = HashSet::new();
-    for scene in &scenario.scenes {
-        if !scene_ids.insert(&scene.id) {
-            return Err(format!("ID de scène en double détecté : {}", scene.id));
-        }
-    }
-
-    if !scene_ids.contains(&scenario.start_scene) {
-        return Err(format!(
-            "La scène de départ '{}' est introuvable.",
-            scenario.start_scene
-        ));
-    }
-
-    for scene in &scenario.scenes {
-        if let Some(ref choices) = scene.choices {
-            for (index, choice) in choices.iter().enumerate() {
-                if !scene_ids.contains(&choice.next) {
-                    return Err(format!(
-                        "Erreur dans la scène '{}' : le choix {} ('{}') pointe vers '{}', qui n'existe pas.",
-                        scene.id, index, choice.label, choice.next
-                    ));
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-
-pub enum CommandOutcome {
-    DisplayOnly,
-    Moved,
-    GameOver(String),
-}
-
-pub trait GameCommand {
-    fn execute(&self, scenario: &Scenario, state: &mut GameState) -> Result<CommandOutcome, GameError>;
-}
-
-pub struct LookCommand;
-pub struct ChooseCommand { pub choice_index: usize }
-pub struct InventoryCommand;
-pub struct StatusCommand;
-pub struct QuitCommand;
-
-impl GameCommand for LookCommand {
-    fn execute(&self, scenario: &Scenario, state: &mut GameState) -> Result<CommandOutcome, GameError> {
-        let scene = scenario.scenes.iter()
-            .find(|s| s.id == state.current_scene_id)
-            .ok_or(GameError::SceneNotFound(state.current_scene_id.clone()))?;
-
-        println!("\n---- {} ----", scene.title);
-        println!("{}", scene.text);
-
-        if let Some(ref choices) = scene.choices {
-            for (i, c) in choices.iter().enumerate() {
-                println!("{}: {}", i, c.label);
-            }
-        }
-        Ok(CommandOutcome::DisplayOnly)
-    }
-}
-
-
-impl GameCommand for ChooseCommand {
-    fn execute(&self, scenario: &Scenario, state: &mut GameState) -> Result<CommandOutcome, GameError> {
-        let current_scene = scenario.scenes.iter()
-            .find(|s| s.id == state.current_scene_id)
-            .ok_or(GameError::SceneNotFound(state.current_scene_id.clone()))?;
-
-        let choices = current_scene.choices.as_ref().ok_or(GameError::InvalidChoice)?;
-        let choice = choices.get(self.choice_index).ok_or(GameError::InvalidChoice)?;
-
-        if let Some(ref required) = choice.required_item {
-            if !state.inventory.contains(required) {
-                return Err(GameError::MissingItem(required.clone()));
-    
-            }
-        }
-        state.current_scene_id = choice.next.clone();
-        let next_scene = scenario.scenes.iter()
-            .find(|s| s.id == state.current_scene_id)
-            .ok_or(GameError::SceneNotFound(state.current_scene_id.clone()))?;
-        if let Some(ref item) = next_scene.found_item {
-            if !state.inventory.contains(item) {
-                state.inventory.push(item.clone());
-            }
-        }
-
-        state.hp += next_scene.hp_delta.unwrap_or(0) as i32;
-
-        if state.hp <= 0 {
-            state.is_running = false;
-            return Ok(CommandOutcome::GameOver("Blessures".to_string()));
-        }
-
-        if let Some(ref end_type) = next_scene.ending {
-            state.is_running = false;
-            return Ok(CommandOutcome::GameOver(format!("Fin: {}", end_type)));
-        }
-
-        Ok(CommandOutcome::Moved)
-    }
-}
-
-impl GameCommand for InventoryCommand {
-    fn execute(&self, _scenario: &Scenario, state: &mut GameState) -> Result<CommandOutcome, GameError> {
-        if state.inventory.is_empty() {
-            println!("Votre inventaire est vide.");
-        } else {
-            println!("Inventaire : {:?}", state.inventory);
-        }
-        Ok(CommandOutcome::DisplayOnly)
-    }
-}
-
-impl GameCommand for StatusCommand {
-    fn execute(&self, _scenario: &Scenario, state: &mut GameState) -> Result<CommandOutcome, GameError> {
-        println!("Points de Vie : {}", state.hp);
-        println!("Lieu actuel : {}", state.current_scene_id);
-        Ok(CommandOutcome::DisplayOnly)
-    }
-}
-
-impl GameCommand for QuitCommand {
-    fn execute(&self, _scenario: &Scenario, state: &mut GameState) -> Result<CommandOutcome, GameError> {
-        state.is_running = false;
-        println!("Merci d'avoir joué !");
-        Ok(CommandOutcome::DisplayOnly)
-    }
-}
-
-
-pub fn parse_command(line: &str) -> Result<Box<dyn GameCommand>, String> {
-    let tokens: Vec<&str> = line.trim().split_whitespace().collect();
-
-    match tokens.as_slice() {
-        ["look"] => Ok(Box::new(LookCommand)),
-        ["inventory"] => Ok(Box::new(InventoryCommand)),
-        ["status"] => Ok(Box::new(StatusCommand)),
-        ["quit"] => Ok(Box::new(QuitCommand)),
-        ["choose", n] => {
-            let idx = n.parse::<usize>().map_err(|_| "L'index doit être un nombre")?;
-            Ok(Box::new(ChooseCommand { choice_index: idx }))
-        },
-        _ => Err("Commande inconnue.".to_string()),
-    }
-}
 
 fn main() {
     let yaml_content = std::fs::read_to_string("story.yaml")
@@ -252,4 +65,104 @@ fn main() {
     }
 
     println!("Fin de la session.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_test() -> (Scenario, GameState) {
+        let yaml = r#"
+start_scene: start
+initial_hp: 10
+scenes:
+  - id: start
+    title: Start
+    text: "Beginning"
+    choices:
+      - label: Go to victory
+        next: win
+      - label: Go to danger
+        next: trap
+      - label: Restricted
+        next: win
+        required_item: key
+
+  - id: win
+    title: Victory
+    text: "You win"
+    ending: Victory
+
+  - id: trap
+    title: Trap
+    text: "You lose HP"
+    hp_delta: -20
+"#;
+        let scenario: Scenario = serde_yaml::from_str(yaml).unwrap();
+        let state = GameState {
+            current_scene_id: scenario.start_scene.clone(),
+            inventory: Vec::new(),
+            hp: scenario.initial_hp,
+            is_running: true,
+        };
+        (scenario, state)
+    }
+
+    #[test]
+    fn test_victory_path() {
+        let (scenario, mut state) = setup_test();
+        let cmd = ChooseCommand { choice_index: 0 };
+        let result = cmd.execute(&scenario, &mut state);
+        
+        assert!(matches!(result, Ok(CommandOutcome::GameOver(m)) if m.contains("Victory")));
+        assert_eq!(state.current_scene_id, "win");
+    }
+
+    #[test]
+    fn test_invalid_choice() {
+        let (scenario, mut state) = setup_test();
+        let cmd = ChooseCommand { choice_index: 99 };
+        let result = cmd.execute(&scenario, &mut state);
+        
+        assert!(matches!(result, Err(GameError::InvalidChoice)));
+    }
+
+    #[test]
+    fn test_missing_item() {
+        let (scenario, mut state) = setup_test();
+        let cmd = ChooseCommand { choice_index: 2 };
+        let result = cmd.execute(&scenario, &mut state);
+        
+        assert!(matches!(result, Err(GameError::MissingItem(i)) if i == "key"));
+    }
+
+    #[test]
+    fn test_game_over_hp() {
+        let (scenario, mut state) = setup_test();
+        let cmd = ChooseCommand { choice_index: 1 };
+        let result = cmd.execute(&scenario, &mut state);
+        
+        assert!(matches!(result, Ok(CommandOutcome::GameOver(m)) if m.contains("Blessures")));
+        assert!(state.hp <= 0);
+    }
+
+    #[test]
+    fn test_invalid_yaml_validation() {
+        let invalid_yaml = r#"
+start_scene: start
+initial_hp: 10
+scenes:
+  - id: start
+    title: Start
+    text: "..."
+    choices:
+      - label: Ghost
+        next: non_existent_id
+"#;
+        let scenario: Scenario = serde_yaml::from_str(invalid_yaml).unwrap();
+        let validation = validate_scenario(&scenario);
+        
+        assert!(validation.is_err());
+        assert!(validation.unwrap_err().contains("non_existent_id"));
+    }
 }
